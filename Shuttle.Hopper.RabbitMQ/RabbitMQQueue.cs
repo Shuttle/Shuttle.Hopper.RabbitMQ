@@ -217,12 +217,6 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
             throw new RabbitMQQueueException(string.Format(Resources.QueueDisposed, Uri));
         }
 
-        if (cancellationToken.IsCancellationRequested)
-        {
-            await _serviceBusOptions.TransportOperation.InvokeAsync(new(this, "[send/cancelled]"), cancellationToken);
-            return;
-        }
-
         if (transportMessage.HasExpired())
         {
             return;
@@ -283,7 +277,7 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
         }
         catch (OperationCanceledException)
         {
-            await _serviceBusOptions.TransportOperation.InvokeAsync(new(this, "[enqueue/cancelled]"), cancellationToken);
+            await _serviceBusOptions.TransportOperation.InvokeAsync(new(this, "[send/cancelled]"), cancellationToken);
         }
         finally
         {
