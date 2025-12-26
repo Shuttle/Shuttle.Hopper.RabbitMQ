@@ -45,7 +45,7 @@ public static class ServiceCollectionExtensions
                 });
             }
 
-            services.TryAddSingleton<ITransportFactory, RabbitMQQueueFactory>();
+            services.AddSingleton<ITransportFactory, RabbitMQQueueFactory>();
 
             return services;
         }
