@@ -11,16 +11,19 @@ public static class RabbitMQConfiguration
 
         services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
 
-        services.AddRabbitMQ(builder =>
+        services.AddHopper(hopperBuilder =>
         {
-            builder.AddOptions("local", new()
+            hopperBuilder.UseRabbitMQ(builder =>
             {
-                Host = "127.0.0.1",
-                Username = "guest",
-                Password = "guest",
-                PrefetchCount = 15,
-                QueueTimeout = TimeSpan.FromMilliseconds(25),
-                ConnectionCloseTimeout = TimeSpan.FromMilliseconds(25)
+                builder.AddOptions("local", new()
+                {
+                    Host = "127.0.0.1",
+                    Username = "guest",
+                    Password = "guest",
+                    PrefetchCount = 15,
+                    QueueTimeout = TimeSpan.FromMilliseconds(25),
+                    ConnectionCloseTimeout = TimeSpan.FromMilliseconds(25)
+                });
             });
         });
 

@@ -1,18 +1,16 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Shuttle.Core.Contract;
 
 namespace Shuttle.Hopper.RabbitMQ;
 
-public static class ServiceCollectionExtensions
+public static class HopperBuilderExtensions
 {
-    extension(IServiceCollection services)
+    extension(HopperBuilder hopperBuilder)
     {
-        public IServiceCollection AddRabbitMQ(Action<RabbitMQBuilder>? builder = null)
+        public IServiceCollection UseRabbitMQ(Action<RabbitMQBuilder>? builder = null)
         {
-            Guard.AgainstNull(services);
-
+            var services = hopperBuilder.Services;
             var rabbitMQBuilder = new RabbitMQBuilder(services);
 
             builder?.Invoke(rabbitMQBuilder);

@@ -3,9 +3,9 @@ using Shuttle.Core.Contract;
 
 namespace Shuttle.Hopper.RabbitMQ;
 
-public class RabbitMQQueueFactory(IOptions<ServiceBusOptions> serviceBusOptions, IOptionsMonitor<RabbitMQOptions> rabbitMQOptions) : ITransportFactory
+public class RabbitMQQueueFactory(IOptions<HopperOptions> hopperOptions, IOptionsMonitor<RabbitMQOptions> rabbitMQOptions) : ITransportFactory
 {
-    private readonly ServiceBusOptions _serviceBusOptions = Guard.AgainstNull(Guard.AgainstNull(serviceBusOptions).Value);
+    private readonly HopperOptions _hopperOptions = Guard.AgainstNull(Guard.AgainstNull(hopperOptions).Value);
     private readonly IOptionsMonitor<RabbitMQOptions> _rabbitMQOptions = Guard.AgainstNull(rabbitMQOptions);
 
     public string Scheme => "rabbitmq";
@@ -20,6 +20,6 @@ public class RabbitMQQueueFactory(IOptions<ServiceBusOptions> serviceBusOptions,
             throw new InvalidOperationException(string.Format(Hopper.Resources.TransportConfigurationNameException, transportUri.ConfigurationName));
         }
 
-        return Task.FromResult<ITransport>(new RabbitMQQueue(_serviceBusOptions, rabbitMQOptions, transportUri));
+        return Task.FromResult<ITransport>(new RabbitMQQueue(_hopperOptions, rabbitMQOptions, transportUri));
     }
 }

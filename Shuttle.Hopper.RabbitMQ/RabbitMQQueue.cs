@@ -6,10 +6,10 @@ namespace Shuttle.Hopper.RabbitMQ;
 
 public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPurgeTransport, IDisposable
 {
-    private readonly ServiceBusOptions _serviceBusOptions;
     private readonly Dictionary<string, object?> _arguments = new();
 
     private readonly ConnectionFactory _factory;
+    private readonly HopperOptions _hopperOptions;
     private readonly SemaphoreSlim _lock = new(1, 1);
 
     private readonly int _operationRetryCount;
@@ -20,11 +20,11 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
 
     private bool _disposed;
 
-    public RabbitMQQueue(ServiceBusOptions serviceBusOptions, RabbitMQOptions rabbitMQOptions, TransportUri uri)
+    public RabbitMQQueue(HopperOptions hopperOptions, RabbitMQOptions rabbitMQOptions, TransportUri uri)
     {
-        _serviceBusOptions = Guard.AgainstNull(serviceBusOptions);
+        _hopperOptions = Guard.AgainstNull(hopperOptions);
         _rabbitMQOptions = Guard.AgainstNull(rabbitMQOptions);
-        
+
         Uri = Guard.AgainstNull(uri);
 
         if (_rabbitMQOptions.Priority != 0)
@@ -50,7 +50,44 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
         };
     }
 
-    public TransportUri Uri { get; }
+    public async Task CreateAsync(CancellationToken cancellationToken = default)
+    {
+        await _hopperOptions.TransportOperation.InvokeAsync(new(this, "[create/starting]"), cancellationToken);
+
+        await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+
+        try
+        {
+            await AccessQueueAsync(async () => await QueueDeclareAsync((await GetRawChannelAsync(cancellationToken)).Channel, cancellationToken));
+        }
+        finally
+        {
+            _lock.Release();
+        }
+
+        await _hopperOptions.TransportOperation.InvokeAsync(new(this, "[create/completed]"), cancellationToken);
+    }
+
+    public async Task DeleteAsync(CancellationToken cancellationToken = default)
+    {
+        await _hopperOptions.TransportOperation.InvokeAsync(new(this, "[delete/starting]"), cancellationToken);
+
+        await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+
+        try
+        {
+            await AccessQueueAsync(async () =>
+            {
+                await (await GetRawChannelAsync(cancellationToken)).Channel.QueueDeleteAsync(Uri.TransportName, cancellationToken: cancellationToken);
+            });
+        }
+        finally
+        {
+            _lock.Release();
+        }
+
+        await _hopperOptions.TransportOperation.InvokeAsync(new(this, "[delete/completed]"), cancellationToken);
+    }
 
     public void Dispose()
     {
@@ -68,6 +105,214 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
         {
             _lock.Release();
         }
+    }
+
+    public async Task PurgeAsync(CancellationToken cancellationToken = default)
+    {
+        await _hopperOptions.TransportOperation.InvokeAsync(new(this, "[purge/starting]"), cancellationToken);
+
+        await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+
+        try
+        {
+            await AccessQueueAsync(async () =>
+            {
+                await (await GetRawChannelAsync(cancellationToken)).Channel.QueuePurgeAsync(Uri.TransportName, cancellationToken);
+            });
+        }
+        finally
+        {
+            _lock.Release();
+        }
+
+        await _hopperOptions.TransportOperation.InvokeAsync(new(this, "[purge/completed]"), cancellationToken);
+    }
+
+    public TransportUri Uri { get; }
+
+    public async Task AcknowledgeAsync(object acknowledgementToken, CancellationToken cancellationToken = default)
+    {
+        await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+
+        try
+        {
+            await AccessQueueAsync(async () => await (await GetRawChannelAsync(cancellationToken)).AcknowledgeAsync((DeliveredMessage)acknowledgementToken, cancellationToken));
+        }
+        finally
+        {
+            _lock.Release();
+        }
+
+        await _hopperOptions.MessageAcknowledged.InvokeAsync(new(this, acknowledgementToken), cancellationToken);
+    }
+
+    public async Task SendAsync(TransportMessage transportMessage, Stream stream, CancellationToken cancellationToken = default)
+    {
+        Guard.AgainstNull(transportMessage);
+        Guard.AgainstNull(stream);
+
+        if (_disposed)
+        {
+            throw new RabbitMQQueueException(string.Format(Resources.QueueDisposed, Uri));
+        }
+
+        if (transportMessage.HasExpired())
+        {
+            return;
+        }
+
+        await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+
+        try
+        {
+            await AccessQueueAsync(async () =>
+            {
+                var channel = (await GetRawChannelAsync(cancellationToken)).Channel;
+
+                var properties = new BasicProperties
+                {
+                    Persistent = _rabbitMQOptions.Persistent,
+                    CorrelationId = transportMessage.MessageId.ToString()
+                };
+
+                if (transportMessage.HasExpiryDate())
+                {
+                    var milliseconds = (long)(transportMessage.ExpiryDateTime - DateTimeOffset.UtcNow).TotalMilliseconds;
+
+                    if (milliseconds < 1)
+                    {
+                        milliseconds = 1;
+                    }
+
+                    properties.Expiration = milliseconds.ToString();
+                }
+
+                if (transportMessage.HasPriority())
+                {
+                    if (transportMessage.Priority > 255)
+                    {
+                        transportMessage.Priority = 255;
+                    }
+
+                    properties.Priority = (byte)transportMessage.Priority;
+                }
+
+                ReadOnlyMemory<byte> data;
+
+                if (stream is MemoryStream ms && ms.TryGetBuffer(out var segment))
+                {
+                    var length = (int)ms.Length;
+                    data = new(segment.Array, segment.Offset, length);
+                }
+                else
+                {
+                    data = stream.ToBytesAsync().GetAwaiter().GetResult();
+                }
+
+                await channel.BasicPublishAsync(string.Empty, Uri.TransportName, false, properties, data, cancellationToken);
+            });
+        }
+        finally
+        {
+            _lock.Release();
+        }
+
+        await _hopperOptions.MessageSent.InvokeAsync(new(this, transportMessage, stream), cancellationToken);
+    }
+
+    public TransportType Type => TransportType.Queue;
+
+    public async Task<ReceivedMessage?> ReceiveAsync(CancellationToken cancellationToken = default)
+    {
+        return await AccessQueueAsync(async () =>
+        {
+            await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+
+            ReceivedMessage? receivedMessage;
+
+            try
+            {
+                var result = await (await GetRawChannelAsync(cancellationToken)).NextAsync(cancellationToken);
+
+                receivedMessage = result == null
+                    ? null
+                    : new ReceivedMessage(new MemoryStream(result.Data, 0, result.DataLength, false, true), result);
+            }
+            finally
+            {
+                _lock.Release();
+            }
+
+            if (receivedMessage != null)
+            {
+                await _hopperOptions.MessageReceived.InvokeAsync(new(this, receivedMessage), cancellationToken);
+            }
+
+            return receivedMessage;
+        });
+    }
+
+    public async ValueTask<bool> HasPendingAsync(CancellationToken cancellationToken = default)
+    {
+        if (_disposed)
+        {
+            return false;
+        }
+
+        await _hopperOptions.TransportOperation.InvokeAsync(new(this, "[has-pending/starting]"), cancellationToken);
+
+        await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+
+        return await AccessQueueAsync(async () =>
+        {
+            bool hasPending;
+
+            try
+            {
+                var result = await (await GetRawChannelAsync(cancellationToken)).Channel.BasicGetAsync(Uri.TransportName, false, cancellationToken);
+
+                hasPending = false;
+
+                if (result != null)
+                {
+                    await (await GetRawChannelAsync(cancellationToken)).Channel.BasicRejectAsync(result.DeliveryTag, true, cancellationToken);
+
+                    hasPending = true;
+                }
+            }
+            finally
+            {
+                _lock.Release();
+            }
+
+            await _hopperOptions.TransportOperation.InvokeAsync(new(this, "[has-pending]", hasPending), cancellationToken);
+
+            return hasPending;
+        });
+    }
+
+    public async Task ReleaseAsync(object acknowledgementToken, CancellationToken cancellationToken = default)
+    {
+        await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
+
+        try
+        {
+            await AccessQueueAsync(async () =>
+            {
+                var deliveredMessage = (DeliveredMessage)acknowledgementToken;
+
+                var rawChannel = await GetRawChannelAsync(cancellationToken);
+
+                await rawChannel.Channel.BasicPublishAsync(string.Empty, Uri.TransportName, false, deliveredMessage.BasicProperties, deliveredMessage.Data.AsMemory(0, deliveredMessage.DataLength), cancellationToken).ConfigureAwait(false);
+                await rawChannel.AcknowledgeAsync(deliveredMessage, cancellationToken);
+            });
+        }
+        finally
+        {
+            _lock.Release();
+        }
+
+        await _hopperOptions.MessageReleased.InvokeAsync(new(this, acknowledgementToken), cancellationToken);
     }
 
     private async Task AccessQueueAsync(Func<Task> action, int retry = 0)
@@ -118,26 +363,6 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
         }
     }
 
-    public async Task AcknowledgeAsync(object acknowledgementToken, CancellationToken cancellationToken = default)
-    {
-        await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-
-        try
-        {
-            await AccessQueueAsync(async () => await (await GetRawChannelAsync(cancellationToken)).AcknowledgeAsync((DeliveredMessage)acknowledgementToken, cancellationToken));
-
-            await _serviceBusOptions.MessageAcknowledged.InvokeAsync(new(this, acknowledgementToken), cancellationToken);
-        }
-        catch (OperationCanceledException)
-        {
-            await _serviceBusOptions.TransportOperation.InvokeAsync(new(this, "[acknowledge/cancelled]"), cancellationToken);
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
-
     private async Task CloseConnectionAsync()
     {
         if (_connection == null)
@@ -160,133 +385,6 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
         }
     }
 
-    public async Task CreateAsync(CancellationToken cancellationToken = default)
-    {
-        await _serviceBusOptions.TransportOperation.InvokeAsync(new(this, "[create/starting]"), cancellationToken);
-
-        await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-
-        try
-        {
-            await AccessQueueAsync(async () => await QueueDeclareAsync((await GetRawChannelAsync(cancellationToken)).Channel, cancellationToken));
-        }
-        catch (OperationCanceledException)
-        {
-            await _serviceBusOptions.TransportOperation.InvokeAsync(new(this, "[create/cancelled]"), cancellationToken);
-        }
-        finally
-        {
-            _lock.Release();
-        }
-
-        await _serviceBusOptions.TransportOperation.InvokeAsync(new(this, "[create/completed]"), cancellationToken);
-    }
-
-    public async Task DeleteAsync(CancellationToken cancellationToken = default)
-    {
-        await _serviceBusOptions.TransportOperation.InvokeAsync(new(this, "[delete/starting]"), cancellationToken);
-
-        await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-
-        try
-        {
-            await AccessQueueAsync(async () =>
-            {
-                await (await GetRawChannelAsync(cancellationToken)).Channel.QueueDeleteAsync(Uri.TransportName, cancellationToken: cancellationToken);
-            });
-        }
-        catch (OperationCanceledException)
-        {
-            await _serviceBusOptions.TransportOperation.InvokeAsync(new(this, "[delete/cancelled]"), cancellationToken);
-        }
-        finally
-        {
-            _lock.Release();
-        }
-
-        await _serviceBusOptions.TransportOperation.InvokeAsync(new(this, "[delete/completed]"), cancellationToken);
-    }
-
-    public async Task SendAsync(TransportMessage transportMessage, Stream stream, CancellationToken cancellationToken = default)
-    {
-        Guard.AgainstNull(transportMessage);
-        Guard.AgainstNull(stream);
-
-        if (_disposed)
-        {
-            throw new RabbitMQQueueException(string.Format(Resources.QueueDisposed, Uri));
-        }
-
-        if (transportMessage.HasExpired())
-        {
-            return;
-        }
-
-        await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-
-        try
-        {
-            await AccessQueueAsync(async () =>
-            {
-                var channel = (await GetRawChannelAsync(cancellationToken)).Channel;
-
-                var properties = new BasicProperties
-                {
-                    Persistent = _rabbitMQOptions.Persistent,
-                    CorrelationId = transportMessage.MessageId.ToString()
-                };
-
-                if (transportMessage.HasExpiryDate())
-                {
-                    var milliseconds = (long)(transportMessage.ExpiryDate - DateTime.Now).TotalMilliseconds;
-
-                    if (milliseconds < 1)
-                    {
-                        milliseconds = 1;
-                    }
-
-                    properties.Expiration = milliseconds.ToString();
-                }
-
-                if (transportMessage.HasPriority())
-                {
-                    if (transportMessage.Priority > 255)
-                    {
-                        transportMessage.Priority = 255;
-                    }
-
-                    properties.Priority = (byte)transportMessage.Priority;
-                }
-
-                ReadOnlyMemory<byte> data;
-
-                if (stream is MemoryStream ms && ms.TryGetBuffer(out var segment))
-                {
-                    var length = (int)ms.Length;
-                    data = new(segment.Array, segment.Offset, length);
-                }
-                else
-                {
-                    data = stream.ToBytesAsync().GetAwaiter().GetResult();
-                }
-
-                await channel.BasicPublishAsync(string.Empty, Uri.TransportName, false, properties, data, cancellationToken);
-            });
-
-            await _serviceBusOptions.MessageSent.InvokeAsync(new(this, transportMessage, stream), cancellationToken);
-        }
-        catch (OperationCanceledException)
-        {
-            await _serviceBusOptions.TransportOperation.InvokeAsync(new(this, "[send/cancelled]"), cancellationToken);
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
-
-    public TransportType Type => TransportType.Queue;
-
     private async Task<IConnection> GetConnectionAsync(CancellationToken cancellationToken)
     {
         if (_connection is { IsOpen: true })
@@ -305,40 +403,6 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
         }
 
         return await _factory.CreateConnectionAsync(Uri.TransportName, cancellationToken);
-    }
-
-    public async Task<ReceivedMessage?> ReceiveAsync(CancellationToken cancellationToken = default)
-    {
-        await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-
-        try
-        {
-            return await AccessQueueAsync(async () =>
-            {
-                var result = await (await GetRawChannelAsync(cancellationToken)).NextAsync(cancellationToken);
-
-                var receivedMessage = result == null
-                    ? null
-                    : new ReceivedMessage(new MemoryStream(result.Data, 0, result.DataLength, false, true), result);
-
-                if (receivedMessage != null)
-                {
-                    await _serviceBusOptions.MessageReceived.InvokeAsync(new(this, receivedMessage), cancellationToken);
-                }
-
-                return receivedMessage;
-            });
-        }
-        catch (OperationCanceledException)
-        {
-            await _serviceBusOptions.TransportOperation.InvokeAsync(new(this, "[receive/cancelled]"), cancellationToken);
-        }
-        finally
-        {
-            _lock.Release();
-        }
-
-        return null;
     }
 
     private async Task<RawChannel> GetRawChannelAsync(CancellationToken cancellationToken)
@@ -381,71 +445,9 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
         return _channel;
     }
 
-    public async ValueTask<bool> HasPendingAsync(CancellationToken cancellationToken = default)
-    {
-        if (_disposed)
-        {
-            return false;
-        }
-
-        await _serviceBusOptions.TransportOperation.InvokeAsync(new(this, "[has-pending/starting]"), cancellationToken);
-
-        await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-
-        try
-        {
-            return await AccessQueueAsync(async () =>
-            {
-                var result = await (await GetRawChannelAsync(cancellationToken)).Channel.BasicGetAsync(Uri.TransportName, false, cancellationToken);
-
-                var hasPending = false;
-
-                if (result != null)
-                {
-                    await (await GetRawChannelAsync(cancellationToken)).Channel.BasicRejectAsync(result.DeliveryTag, true, cancellationToken);
-
-                    hasPending = true;
-                }
-
-                await _serviceBusOptions.TransportOperation.InvokeAsync(new(this, "[has-pending]", hasPending), cancellationToken);
-
-                return hasPending;
-            });
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
-
-    public async Task PurgeAsync(CancellationToken cancellationToken = default)
-    {
-        await _serviceBusOptions.TransportOperation.InvokeAsync(new(this, "[purge/starting]"), cancellationToken);
-
-        await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-
-        try
-        {
-            await AccessQueueAsync(async () =>
-            {
-                await (await GetRawChannelAsync(cancellationToken)).Channel.QueuePurgeAsync(Uri.TransportName, cancellationToken);
-            });
-        }
-        catch (OperationCanceledException)
-        {
-            await _serviceBusOptions.TransportOperation.InvokeAsync(new(this, "[purge/cancelled]"), cancellationToken);
-        }
-        finally
-        {
-            _lock.Release();
-        }
-
-        await _serviceBusOptions.TransportOperation.InvokeAsync(new(this, "[purge/completed]"), cancellationToken);
-    }
-
     private async Task QueueDeclareAsync(IChannel channel, CancellationToken cancellationToken = default)
     {
-        await _serviceBusOptions.TransportOperation.InvokeAsync(new(this, "[queue-declare/starting]"), cancellationToken);
+        await _hopperOptions.TransportOperation.InvokeAsync(new(this, "[queue-declare/starting]"), cancellationToken);
 
         await channel.QueueDeclareAsync(Uri.TransportName, _rabbitMQOptions.Durable, false, false, _arguments, cancellationToken: cancellationToken);
 
@@ -453,39 +455,11 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
         {
             await channel.QueueDeclarePassiveAsync(Uri.TransportName, cancellationToken);
 
-            await _serviceBusOptions.TransportOperation.InvokeAsync(new(this, "[queue-declare/]"), cancellationToken);
+            await _hopperOptions.TransportOperation.InvokeAsync(new(this, "[queue-declare/]"), cancellationToken);
         }
         catch
         {
-            await _serviceBusOptions.TransportOperation.InvokeAsync(new(this, "[queue-declare/failed]"), cancellationToken);
-        }
-    }
-
-    public async Task ReleaseAsync(object acknowledgementToken, CancellationToken cancellationToken = default)
-    {
-        await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
-
-        try
-        {
-            await AccessQueueAsync(async () =>
-            {
-                var deliveredMessage = (DeliveredMessage)acknowledgementToken;
-
-                var rawChannel = await GetRawChannelAsync(cancellationToken);
-
-                await rawChannel.Channel.BasicPublishAsync(string.Empty, Uri.TransportName, false, deliveredMessage.BasicProperties, deliveredMessage.Data.AsMemory(0, deliveredMessage.DataLength), cancellationToken).ConfigureAwait(false);
-                await rawChannel.AcknowledgeAsync(deliveredMessage, cancellationToken);
-            });
-
-            await _serviceBusOptions.MessageReleased.InvokeAsync(new(this, acknowledgementToken), cancellationToken);
-        }
-        catch (OperationCanceledException)
-        {
-            await _serviceBusOptions.TransportOperation.InvokeAsync(new(this, "[release/cancelled]"), cancellationToken);
-        }
-        finally
-        {
-            _lock.Release();
+            await _hopperOptions.TransportOperation.InvokeAsync(new(this, "[queue-declare/failed]"), cancellationToken);
         }
     }
 }
