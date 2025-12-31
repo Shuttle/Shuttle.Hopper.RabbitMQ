@@ -1,6 +1,5 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
-using Shuttle.Core.Contract;
 
 namespace Shuttle.Hopper.RabbitMQ;
 
@@ -8,7 +7,7 @@ public static class HopperBuilderExtensions
 {
     extension(HopperBuilder hopperBuilder)
     {
-        public IServiceCollection UseRabbitMQ(Action<RabbitMQBuilder>? builder = null)
+        public HopperBuilder UseRabbitMQ(Action<RabbitMQBuilder>? builder = null)
         {
             var services = hopperBuilder.Services;
             var rabbitMQBuilder = new RabbitMQBuilder(services);
@@ -45,7 +44,7 @@ public static class HopperBuilderExtensions
 
             services.AddSingleton<ITransportFactory, RabbitMQQueueFactory>();
 
-            return services;
+            return hopperBuilder;
         }
     }
 }
