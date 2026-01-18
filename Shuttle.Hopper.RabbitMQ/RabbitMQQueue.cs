@@ -177,7 +177,7 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
 
                 if (transportMessage.HasExpiryDate())
                 {
-                    var milliseconds = (long)(transportMessage.ExpiryDateTime - DateTimeOffset.UtcNow).TotalMilliseconds;
+                    var milliseconds = (long)(transportMessage.ExpiresAt - DateTimeOffset.UtcNow).TotalMilliseconds;
 
                     if (milliseconds < 1)
                     {
