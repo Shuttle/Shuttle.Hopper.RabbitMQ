@@ -14,7 +14,7 @@
 
   <ItemGroup>
     <PackageReference Include="RabbitMQ.Client" Version="7.2.0" />
-    <PackageReference Include="Shuttle.Hopper" Version="21.0.0-alpha" />
+    <PackageReference Include="Shuttle.Hopper" Version="21.0.1-beta" />
   </ItemGroup>
 
   <ItemGroup>
@@ -34,7 +34,7 @@
 
   <PropertyGroup>
     <Description>RabbitMQ implementation for use with Shuttle.Hopper.</Description>
-    <Version>21.0.0-alpha</Version>
+    <Version>21.0.1-beta</Version>
     <PackageProjectUrl>https://github.com/shuttle/Shuttle.Hopper.RabbitMQ</PackageProjectUrl>
     <RepositoryUrl>https://github.com/shuttle/Shuttle.Hopper.RabbitMQ.git</RepositoryUrl>
     <PackageTags>shuttle rabbitmq</PackageTags>
