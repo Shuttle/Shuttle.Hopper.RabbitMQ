@@ -2,7 +2,7 @@
 
 This RabbitMQ implementation follows the `at-least-once` delivery mechanism supported by Shuttle.Hopper.
 
-If necessary you may want to use an *outbox* for a `store-and-forward` solution.  By using a transactional outbox such as the `Shuttle.Hopper.Sql.Queue` implementation you could roll back sending of messages on failure.
+If necessary you may want to use an *outbox* for a `store-and-forward` solution.  By using a transactional outbox such as the `Shuttle.Hopper.SqlServer.Queue` implementation you could roll back sending of messages on failure.
 
 ## Installation
 

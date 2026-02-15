@@ -1,6 +1,9 @@
 ﻿using RabbitMQ.Client;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Shuttle.Core.Contract;
 using Shuttle.Core.Streams;
+using Shuttle.Hopper;
 
 namespace Shuttle.Hopper.RabbitMQ;
 
@@ -18,10 +21,12 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
     private RawChannel? _channel;
     private IConnection? _connection;
 
+    private readonly ILogger<RabbitMQQueue> _logger;
     private bool _disposed;
 
-    public RabbitMQQueue(HopperOptions hopperOptions, RabbitMQOptions rabbitMQOptions, TransportUri uri)
+    public RabbitMQQueue(HopperOptions hopperOptions, RabbitMQOptions rabbitMQOptions, TransportUri uri, ILogger<RabbitMQQueue>? logger = null)
     {
+        _logger = logger ?? NullLogger<RabbitMQQueue>.Instance;
         _hopperOptions = Guard.AgainstNull(hopperOptions);
         _rabbitMQOptions = Guard.AgainstNull(rabbitMQOptions);
 
@@ -52,6 +57,8 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
 
     public async Task CreateAsync(CancellationToken cancellationToken = default)
     {
+        LogMessage.Operation(_logger, Uri.Uri.Scheme, Uri.TransportName, "[create/starting]");
+
         await _hopperOptions.TransportOperation.InvokeAsync(new(this, "[create/starting]"), cancellationToken);
 
         await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
@@ -65,11 +72,15 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
             _lock.Release();
         }
 
+        LogMessage.Operation(_logger, Uri.Uri.Scheme, Uri.TransportName, "[create/completed]");
+
         await _hopperOptions.TransportOperation.InvokeAsync(new(this, "[create/completed]"), cancellationToken);
     }
 
     public async Task DeleteAsync(CancellationToken cancellationToken = default)
     {
+        LogMessage.Operation(_logger, Uri.Uri.Scheme, Uri.TransportName, "[delete/starting]");
+
         await _hopperOptions.TransportOperation.InvokeAsync(new(this, "[delete/starting]"), cancellationToken);
 
         await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
@@ -85,6 +96,8 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
         {
             _lock.Release();
         }
+
+        LogMessage.Operation(_logger, Uri.Uri.Scheme, Uri.TransportName, "[delete/completed]");
 
         await _hopperOptions.TransportOperation.InvokeAsync(new(this, "[delete/completed]"), cancellationToken);
     }
@@ -109,6 +122,8 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
 
     public async Task PurgeAsync(CancellationToken cancellationToken = default)
     {
+        LogMessage.Operation(_logger, Uri.Uri.Scheme, Uri.TransportName, "[purge/starting]");
+
         await _hopperOptions.TransportOperation.InvokeAsync(new(this, "[purge/starting]"), cancellationToken);
 
         await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
@@ -124,6 +139,8 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
         {
             _lock.Release();
         }
+
+        LogMessage.Operation(_logger, Uri.Uri.Scheme, Uri.TransportName, "[purge/completed]");
 
         await _hopperOptions.TransportOperation.InvokeAsync(new(this, "[purge/completed]"), cancellationToken);
     }
@@ -142,6 +159,8 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
         {
             _lock.Release();
         }
+
+        LogMessage.MessageAcknowledged(_logger, Uri.Uri.Scheme, Uri.TransportName);
 
         await _hopperOptions.MessageAcknowledged.InvokeAsync(new(this, acknowledgementToken), cancellationToken);
     }
@@ -217,6 +236,8 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
             _lock.Release();
         }
 
+        LogMessage.MessageEnqueued(_logger, Uri.Uri.Scheme, Uri.TransportName, transportMessage.MessageType, transportMessage.MessageId);
+
         await _hopperOptions.MessageSent.InvokeAsync(new(this, transportMessage, stream), cancellationToken);
     }
 
@@ -245,6 +266,8 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
 
             if (receivedMessage != null)
             {
+                LogMessage.MessageReceived(_logger, Uri.Uri.Scheme, Uri.TransportName);
+
                 await _hopperOptions.MessageReceived.InvokeAsync(new(this, receivedMessage), cancellationToken);
             }
 
@@ -258,6 +281,8 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
         {
             return false;
         }
+
+        LogMessage.Operation(_logger, Uri.Uri.Scheme, Uri.TransportName, "[has-pending/starting]");
 
         await _hopperOptions.TransportOperation.InvokeAsync(new(this, "[has-pending/starting]"), cancellationToken);
 
@@ -285,6 +310,8 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
                 _lock.Release();
             }
 
+            LogMessage.Operation(_logger, Uri.Uri.Scheme, Uri.TransportName, "[has-pending]");
+
             await _hopperOptions.TransportOperation.InvokeAsync(new(this, "[has-pending]", hasPending), cancellationToken);
 
             return hasPending;
@@ -311,6 +338,8 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
         {
             _lock.Release();
         }
+
+        LogMessage.MessageReleased(_logger, Uri.Uri.Scheme, Uri.TransportName);
 
         await _hopperOptions.MessageReleased.InvokeAsync(new(this, acknowledgementToken), cancellationToken);
     }
@@ -447,6 +476,8 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
 
     private async Task QueueDeclareAsync(IChannel channel, CancellationToken cancellationToken = default)
     {
+        LogMessage.Operation(_logger, Uri.Uri.Scheme, Uri.TransportName, "[queue-declare/starting]");
+
         await _hopperOptions.TransportOperation.InvokeAsync(new(this, "[queue-declare/starting]"), cancellationToken);
 
         await channel.QueueDeclareAsync(Uri.TransportName, _rabbitMQOptions.Durable, false, false, _arguments, cancellationToken: cancellationToken);
@@ -455,10 +486,14 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
         {
             await channel.QueueDeclarePassiveAsync(Uri.TransportName, cancellationToken);
 
+            LogMessage.Operation(_logger, Uri.Uri.Scheme, Uri.TransportName, "[queue-declare/]");
+
             await _hopperOptions.TransportOperation.InvokeAsync(new(this, "[queue-declare/]"), cancellationToken);
         }
         catch
         {
+            LogMessage.Operation(_logger, Uri.Uri.Scheme, Uri.TransportName, "[queue-declare/failed]");
+
             await _hopperOptions.TransportOperation.InvokeAsync(new(this, "[queue-declare/failed]"), cancellationToken);
         }
     }

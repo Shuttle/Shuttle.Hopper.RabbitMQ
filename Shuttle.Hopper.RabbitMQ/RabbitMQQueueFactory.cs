@@ -1,9 +1,10 @@
-﻿using Microsoft.Extensions.Options;
+﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Shuttle.Core.Contract;
 
 namespace Shuttle.Hopper.RabbitMQ;
 
-public class RabbitMQQueueFactory(IOptions<HopperOptions> hopperOptions, IOptionsMonitor<RabbitMQOptions> rabbitMQOptions) : ITransportFactory
+public class RabbitMQQueueFactory(IOptions<HopperOptions> hopperOptions, IOptionsMonitor<RabbitMQOptions> rabbitMQOptions, ILogger<RabbitMQQueue>? logger = null) : ITransportFactory
 {
     private readonly HopperOptions _hopperOptions = Guard.AgainstNull(Guard.AgainstNull(hopperOptions).Value);
     private readonly IOptionsMonitor<RabbitMQOptions> _rabbitMQOptions = Guard.AgainstNull(rabbitMQOptions);
@@ -20,6 +21,6 @@ public class RabbitMQQueueFactory(IOptions<HopperOptions> hopperOptions, IOption
             throw new InvalidOperationException(string.Format(Hopper.Resources.TransportConfigurationNameException, transportUri.ConfigurationName));
         }
 
-        return Task.FromResult<ITransport>(new RabbitMQQueue(_hopperOptions, rabbitMQOptions, transportUri));
+        return Task.FromResult<ITransport>(new RabbitMQQueue(_hopperOptions, rabbitMQOptions, transportUri, logger));
     }
 }
