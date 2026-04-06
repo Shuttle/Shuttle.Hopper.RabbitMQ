@@ -5,13 +5,11 @@ namespace Shuttle.Hopper.RabbitMQ.Tests;
 
 public class RabbitMQInboxFixture : InboxFixture
 {
-    [TestCase(true, true)]
-    [TestCase(true, false)]
-    [TestCase(false, true)]
-    [TestCase(false, false)]
-    public async Task Should_be_able_handle_errors_async(bool hasErrorQueue, bool isTransactionalEndpoint)
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task Should_be_able_handle_errors_async(bool hasErrorQueue)
     {
-        await TestInboxErrorAsync(RabbitMQConfiguration.GetServiceCollection(), "rabbitmq://local/{0}", hasErrorQueue, isTransactionalEndpoint);
+        await TestInboxErrorAsync(RabbitMQConfiguration.GetServiceCollection(), "rabbitmq://local/{0}", hasErrorQueue);
     }
 
     [Test]
@@ -26,10 +24,9 @@ public class RabbitMQInboxFixture : InboxFixture
         await TestInboxDeferredAsync(RabbitMQConfiguration.GetServiceCollection(), "rabbitmq://local/{0}", TimeSpan.FromMilliseconds(500));
     }
 
-    [TestCase(250, false)]
-    [TestCase(250, true)]
-    public async Task Should_be_able_to_process_messages_concurrently_async(int msToComplete, bool isTransactionalEndpoint)
+    [Test]
+    public async Task Should_be_able_to_process_messages_concurrently_async()
     {
-        await TestInboxConcurrencyAsync(RabbitMQConfiguration.GetServiceCollection(), "rabbitmq://local/{0}", msToComplete, isTransactionalEndpoint);
+        await TestInboxConcurrencyAsync(RabbitMQConfiguration.GetServiceCollection(), "rabbitmq://local/{0}", TimeSpan.FromMinutes(1));
     }
 }
