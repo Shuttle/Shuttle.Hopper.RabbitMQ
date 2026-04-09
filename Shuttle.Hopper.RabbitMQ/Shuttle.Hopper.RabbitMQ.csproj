@@ -14,7 +14,7 @@
 
   <ItemGroup>
     <PackageReference Include="RabbitMQ.Client" Version="7.2.1" />
-    <ProjectReference Include="..\..\Shuttle.Hopper\Shuttle.Hopper\Shuttle.Hopper.csproj" />
+    <PackageReference Include="Shuttle.Hopper" Version="21.0.1-rc3" />
   </ItemGroup>
 
   <ItemGroup>

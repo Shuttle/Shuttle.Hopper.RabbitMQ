@@ -1,5 +1,5 @@
 ﻿using RabbitMQ.Client;
-using Shuttle.Core.Contract;
+using Shuttle.Contract;
 
 namespace Shuttle.Hopper.RabbitMQ;
 

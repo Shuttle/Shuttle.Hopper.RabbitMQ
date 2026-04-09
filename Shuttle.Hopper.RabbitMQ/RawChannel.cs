@@ -2,7 +2,7 @@
 using System.Collections.Concurrent;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
-using Shuttle.Core.Contract;
+using Shuttle.Contract;
 
 namespace Shuttle.Hopper.RabbitMQ;
 

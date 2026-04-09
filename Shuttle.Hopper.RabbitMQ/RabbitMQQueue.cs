@@ -1,9 +1,9 @@
 ﻿using RabbitMQ.Client;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using Shuttle.Core.Contract;
-using Shuttle.Core.Streams;
-using Shuttle.Hopper;
+using Shuttle.Contract;
+using Shuttle.Streams;
+using Shuttle.Pipelines;
 
 namespace Shuttle.Hopper.RabbitMQ;
 
@@ -165,10 +165,13 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
         await _hopperOptions.MessageAcknowledged.InvokeAsync(new(this, acknowledgementToken), cancellationToken);
     }
 
-    public async Task SendAsync(TransportMessage transportMessage, Stream stream, CancellationToken cancellationToken = default)
+    public async Task SendAsync(Stream stream, IState state, CancellationToken cancellationToken = default)
     {
-        Guard.AgainstNull(transportMessage);
-        Guard.AgainstNull(stream);
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(state);
+
+        var transportMessage = Guard.AgainstNull(state.GetTransportMessage());
+
 
         if (_disposed)
         {
