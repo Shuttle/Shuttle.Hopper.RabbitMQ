@@ -3,17 +3,15 @@ using Shuttle.Contract;
 
 namespace Shuttle.Hopper.RabbitMQ;
 
-public class RabbitMQBuilder
+public class RabbitMQBuilder(IServiceCollection services)
 {
     internal readonly Dictionary<string, Action<RabbitMQOptions>> RabbitMQConfigureOptions = new();
 
     public RabbitMQBuilder Configure(string name, Action<RabbitMQOptions> configureOptions)
     {
-        Guard.AgainstEmpty(name);
-        Guard.AgainstNull(configureOptions);
-
-        RabbitMQConfigureOptions.Remove(name);
-        RabbitMQConfigureOptions.Add(name, configureOptions);
+        Guard.AgainstNull(services)
+            .AddOptions<RabbitMQOptions>(Guard.AgainstEmpty(name))
+            .Configure(Guard.AgainstNull(configureOptions));
 
         return this;
     }
