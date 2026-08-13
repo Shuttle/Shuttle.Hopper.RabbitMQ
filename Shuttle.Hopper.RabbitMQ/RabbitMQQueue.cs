@@ -147,7 +147,7 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
 
     public TransportUri Uri { get; }
 
-    public async Task AcknowledgeAsync(object acknowledgementToken, CancellationToken cancellationToken = default)
+    public async Task AcknowledgeAsync(object acknowledgementToken, IPipeline pipeline, CancellationToken cancellationToken = default)
     {
         await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
 
@@ -162,15 +162,15 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
 
         LogMessage.MessageAcknowledged(_logger, Uri.Uri.Scheme, Uri.TransportName);
 
-        await _hopperOptions.MessageAcknowledged.InvokeAsync(new(this, acknowledgementToken), cancellationToken);
+        await _hopperOptions.MessageAcknowledged.InvokeAsync(new(this, acknowledgementToken, pipeline), cancellationToken);
     }
 
-    public async Task SendAsync(Stream stream, IState state, CancellationToken cancellationToken = default)
+    public async Task SendAsync(Stream stream, IPipeline pipeline, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(stream);
-        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(pipeline);
 
-        var transportMessage = Guard.AgainstNull(state.GetTransportMessage());
+        var transportMessage = Guard.AgainstNull(pipeline.State.GetTransportMessage());
 
 
         if (_disposed)
@@ -241,12 +241,12 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
 
         LogMessage.MessageEnqueued(_logger, Uri.Uri.Scheme, Uri.TransportName, transportMessage.MessageType, transportMessage.MessageId);
 
-        await _hopperOptions.MessageSent.InvokeAsync(new(this, transportMessage, stream), cancellationToken);
+        await _hopperOptions.MessageSent.InvokeAsync(new(this, stream, pipeline), cancellationToken);
     }
 
     public TransportType Type => TransportType.Queue;
 
-    public async Task<ReceivedMessage?> ReceiveAsync(CancellationToken cancellationToken = default)
+    public async Task<ReceivedMessage?> ReceiveAsync(IPipeline pipeline, CancellationToken cancellationToken = default)
     {
         return await AccessQueueAsync(async () =>
         {
@@ -271,7 +271,7 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
             {
                 LogMessage.MessageReceived(_logger, Uri.Uri.Scheme, Uri.TransportName);
 
-                await _hopperOptions.MessageReceived.InvokeAsync(new(this, receivedMessage), cancellationToken);
+                await _hopperOptions.MessageReceived.InvokeAsync(new(this, receivedMessage, pipeline), cancellationToken);
             }
 
             return receivedMessage;
@@ -321,7 +321,7 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
         });
     }
 
-    public async Task ReleaseAsync(object acknowledgementToken, CancellationToken cancellationToken = default)
+    public async Task ReleaseAsync(object acknowledgementToken, IPipeline pipeline, CancellationToken cancellationToken = default)
     {
         await _lock.WaitAsync(CancellationToken.None).ConfigureAwait(false);
 
@@ -344,7 +344,7 @@ public class RabbitMQQueue : ITransport, ICreateTransport, IDeleteTransport, IPu
 
         LogMessage.MessageReleased(_logger, Uri.Uri.Scheme, Uri.TransportName);
 
-        await _hopperOptions.MessageReleased.InvokeAsync(new(this, acknowledgementToken), cancellationToken);
+        await _hopperOptions.MessageReleased.InvokeAsync(new(this, acknowledgementToken, pipeline), cancellationToken);
     }
 
     private async Task AccessQueueAsync(Func<Task> action, int retry = 0)
